@@ -1,23 +1,19 @@
 package com.github.thisisdun998.findfriend.toolWindow
 
-import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBTextField
 import com.intellij.ui.content.ContentFactory
-import com.github.thisisdun998.findfriend.MyBundle
-import com.github.thisisdun998.findfriend.services.MyProjectService
+import com.intellij.util.ui.FormBuilder
+import com.github.thisisdun998.findfriend.services.WebSocketService
 import javax.swing.JButton
-
+import javax.swing.JPanel
 
 class MyToolWindowFactory : ToolWindowFactory {
-
-    init {
-        thisLogger().warn("Don't forget to remove all non-needed sample code files with their corresponding registration entries in `plugin.xml`.")
-    }
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val myToolWindow = MyToolWindow(toolWindow)
@@ -29,17 +25,30 @@ class MyToolWindowFactory : ToolWindowFactory {
 
     class MyToolWindow(toolWindow: ToolWindow) {
 
-        private val service = toolWindow.project.service<MyProjectService>()
+        fun getContent(): JPanel {
+            val toIdField = JBTextField("1002")
+            val messageField = JBTextField("Hello!")
+            val statusLabel = JBLabel("Ready")
 
-        fun getContent() = JBPanel<JBPanel<*>>().apply {
-            val label = JBLabel(MyBundle.message("randomLabel", "?"))
-
-            add(label)
-            add(JButton(MyBundle.message("shuffle")).apply {
-                addActionListener {
-                    label.text = MyBundle.message("randomLabel", service.getRandomNumber())
-                }
-            })
+            return FormBuilder.createFormBuilder()
+                .addLabeledComponent(JBLabel("To User ID:"), toIdField, 1, false)
+                .addLabeledComponent(JBLabel("Message:"), messageField, 1, false)
+                .addComponent(JButton("Send").apply {
+                    addActionListener {
+                        val toId = toIdField.text
+                        val msg = messageField.text
+                        if (toId.isNotBlank() && msg.isNotBlank()) {
+                            ApplicationManager.getApplication().getService(WebSocketService::class.java)
+                                .sendMessage(toId, msg)
+                            statusLabel.text = "Sent to $toId"
+                        } else {
+                            statusLabel.text = "Fields cannot be empty"
+                        }
+                    }
+                })
+                .addComponent(statusLabel)
+                .addComponentFillVertically(JPanel(), 0)
+                .panel
         }
     }
 }

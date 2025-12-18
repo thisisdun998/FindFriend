@@ -9,7 +9,15 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.thisisdun998.findfriend.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
+        <toolWindow factoryClass="com.github.thisisdun998.findfriend.toolWindow.MyToolWindowFactory" id="FindFriendChat" anchor="right"/>
         <postStartupActivity implementation="com.github.thisisdun998.findfriend.startup.MyProjectActivity" />
+        
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.github.thisisdun998.findfriend.settings.AppSettingsConfigurable"
+            id="com.github.thisisdun998.findfriend.settings.AppSettingsConfigurable"
+            displayName="FindFriend Settings"/>
+            
+        <applicationService serviceImplementation="com.github.thisisdun998.findfriend.settings.AppSettingsState"/>
     </extensions>
 </idea-plugin>
