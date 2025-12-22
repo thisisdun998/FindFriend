@@ -10,6 +10,7 @@ class AppSettingsComponent {
     private val userIdField = JBTextField()
 
     init {
+        userIdField.isEditable = false // Make User ID read-only
         panel = FormBuilder.createFormBuilder()
             .addLabeledComponent(JBLabel("User ID:"), userIdField, 1, false)
             .addComponentFillVertically(JPanel(), 0)

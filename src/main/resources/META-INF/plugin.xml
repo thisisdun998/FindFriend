@@ -9,9 +9,8 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.thisisdun998.findfriend.toolWindow.MyToolWindowFactory" id="FindFriendChat" anchor="right"/>
-        <postStartupActivity implementation="com.github.thisisdun998.findfriend.startup.MyProjectActivity" />
-        
+        <toolWindow factoryClass="com.github.thisisdun998.findfriend.toolWindow.MyToolWindowFactory" icon="/icon/pluginIcon.svg" id="FindFriendChat" anchor="right"/>
+
         <applicationConfigurable
             parentId="tools"
             instance="com.github.thisisdun998.findfriend.settings.AppSettingsConfigurable"

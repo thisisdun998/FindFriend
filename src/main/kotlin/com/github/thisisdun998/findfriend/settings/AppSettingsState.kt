@@ -11,7 +11,13 @@ import com.intellij.util.xmlb.XmlSerializerUtil
     storages = [Storage("FindFriendSettings.xml")]
 )
 class AppSettingsState : PersistentStateComponent<AppSettingsState> {
-    var userId: String = "1001"
+    var userId: String = ""
+
+    init {
+        if (userId.isEmpty()) {
+            userId = java.util.UUID.randomUUID().toString()
+        }
+    }
 
     companion object {
         val instance: AppSettingsState
@@ -24,5 +30,9 @@ class AppSettingsState : PersistentStateComponent<AppSettingsState> {
 
     override fun loadState(state: AppSettingsState) {
         XmlSerializerUtil.copyBean(state, this)
+        // Ensure ID exists even after load if somehow missing
+        if (userId.isEmpty()) {
+             userId = java.util.UUID.randomUUID().toString()
+        }
     }
 }

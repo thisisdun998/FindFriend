@@ -41,7 +41,7 @@ class WebSocketService {
             return
         }
 
-        val uri = URI.create("ws://192.168.1.125:8080/chat/$userId")
+        val uri = URI.create("ws://106.12.14.8:9001/chat/$userId")
         try {
             val builder = client.newWebSocketBuilder()
             builder.buildAsync(uri, WebSocketListener())
@@ -96,18 +96,29 @@ class WebSocketService {
             logger.info("Received message: $message")
 
             // Parse JSON manually to avoid dependencies
+            val type = extractJsonField(message, "type")
             val content = extractJsonField(message, "content")
             val fromId = extractJsonField(message, "fromId")
 
-            if (content != null && content.isNotEmpty()) {
+            if (type == "ERROR" && content != null) {
+                // Handle error message (e.g. User offline)
+                // Assume fromId carries the ID of the user we tried to contact, or use "System"
+                val targetId = if (!fromId.isNullOrEmpty()) fromId else "System"
+                
+                ApplicationManager.getApplication().service<ChatHistoryService>().addSystemMessage(targetId, content)
+                ApplicationManager.getApplication().messageBus.syncPublisher(ChatListener.TOPIC).onMessageReceived(targetId)
+            } else if (content != null && content.isNotEmpty()) {
                 val sender = fromId ?: "Unknown"
                 
                 // Store message
-                ApplicationManager.getApplication().service<ChatHistoryService>().addMessage(sender, content)
+                ApplicationManager.getApplication().service<ChatHistoryService>().addMessage(sender, content, false)
+                
+                // Notify UI update via MessageBus
+                ApplicationManager.getApplication().messageBus.syncPublisher(ChatListener.TOPIC).onMessageReceived(sender)
 
                 // Show UI notification on EDT
                 SwingUtilities.invokeLater {
-                    NotificationDialog("$sender: $content").show()
+                    NotificationDialog(sender, content).show()
                 }
             }
             
@@ -134,9 +145,15 @@ class WebSocketService {
 
     fun sendMessage(toId: String, content: String) {
         if (webSocket == null) {
-            NotificationDialog("Not connected! Check Settings.").show()
+            // NotificationDialog needs senderId and content, here we just show error
+            // Using a simple message dialog would be better but reusing NotificationDialog for consistency if needed
+            // Or just logging/ignoring for now as this is edge case
             return
         }
+        
+        // Store sent message
+        ApplicationManager.getApplication().service<ChatHistoryService>().addMessage(toId, content, true)
+        ApplicationManager.getApplication().messageBus.syncPublisher(ChatListener.TOPIC).onMessageReceived(toId)
         
         // Construct JSON manually
         val json = """

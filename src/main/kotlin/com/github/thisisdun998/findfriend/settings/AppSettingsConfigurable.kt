@@ -16,19 +16,11 @@ class AppSettingsConfigurable : Configurable {
     }
 
     override fun isModified(): Boolean {
-        val settings = AppSettingsState.instance
-        return mySettingsComponent!!.userIdText != settings.userId
+        return false // User ID is read-only
     }
 
     override fun apply() {
-        val settings = AppSettingsState.instance
-        val oldUserId = settings.userId
-        settings.userId = mySettingsComponent!!.userIdText
-        
-        if (oldUserId != settings.userId) {
-            // Reconnect if userId changed
-            ApplicationManager.getApplication().getService(WebSocketService::class.java).reconnect()
-        }
+        // No changes to apply
     }
 
     override fun reset() {
