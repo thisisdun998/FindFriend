@@ -27,11 +27,11 @@ class MyToolWindowFactory : ToolWindowFactory {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val myToolWindow = MyToolWindow(toolWindow)
-        val content = ContentFactory.getInstance().createContent(myToolWindow.getContent(), null, false)
+        // Retrieve ContentFactory via ApplicationManager service to ensure compatibility with 2021.1+
+        val contentFactory = ApplicationManager.getApplication().getService(ContentFactory::class.java)
+        val content = contentFactory.createContent(myToolWindow.getContent(), null, false)
         toolWindow.contentManager.addContent(content)
     }
-
-    override fun shouldBeAvailable(project: Project) = true
 
     class MyToolWindow(toolWindow: ToolWindow) {
         private val cardLayout = CardLayout()
