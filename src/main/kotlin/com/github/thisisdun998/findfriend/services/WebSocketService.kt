@@ -10,9 +10,12 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.WebSocket
 import java.util.concurrent.CompletionStage
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.swing.SwingUtilities
 
 @Service(Service.Level.APP)
@@ -22,6 +25,18 @@ class WebSocketService {
     private val client = HttpClient.newHttpClient()
     private val reconnectDelayMs = 5000L
     private val heartbeatExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    
+    // 连接状态管理
+    private val isConnecting = AtomicBoolean(false)
+    private val isConnected = AtomicBoolean(false)
+    
+    // 心跳检测
+    private val lastPongTime = AtomicLong(System.currentTimeMillis())
+    private val heartbeatIntervalSeconds = 30L
+    private val heartbeatTimeoutMs = 90000L // 3次心跳无响应则认为断开
+    
+    // 消息队列：断开时缓存消息，重连后发送
+    private val pendingMessages = ConcurrentLinkedQueue<Pair<String, String>>()
 
     init {
         connect()
@@ -29,15 +44,32 @@ class WebSocketService {
     }
 
     fun reconnect() {
-        webSocket?.sendClose(WebSocket.NORMAL_CLOSURE, "Reconnecting")
-        webSocket = null
+        logger.info("Manual reconnect triggered")
+        closeConnection()
         connect()
+    }
+    
+    private fun closeConnection() {
+        try {
+            webSocket?.sendClose(WebSocket.NORMAL_CLOSURE, "Reconnecting")
+        } catch (e: Exception) {
+            logger.warn("Error closing WebSocket: ${e.message}")
+        }
+        webSocket = null
+        isConnected.set(false)
     }
 
     private fun connect() {
+        // 防止重复连接
+        if (!isConnecting.compareAndSet(false, true)) {
+            logger.info("Connection already in progress, skipping")
+            return
+        }
+        
         val userId = AppSettingsState.instance.userId
         if (userId.isEmpty()) {
             logger.warn("User ID not set, skipping connection")
+            isConnecting.set(false)
             return
         }
 
@@ -47,27 +79,64 @@ class WebSocketService {
             builder.buildAsync(uri, WebSocketListener())
                 .thenAccept { ws ->
                     webSocket = ws
+                    isConnected.set(true)
+                    isConnecting.set(false)
+                    lastPongTime.set(System.currentTimeMillis())
                     logger.info("WebSocket connected to $uri")
+                    
+                    // 发送队列中的待发消息
+                    flushPendingMessages()
                 }
                 .exceptionally { e ->
                     logger.warn("WebSocket connection failed: ${e.message}")
+                    isConnecting.set(false)
+                    isConnected.set(false)
                     scheduleReconnect()
                     null
                 }
         } catch (e: Exception) {
             logger.error("Error creating WebSocket connection", e)
+            isConnecting.set(false)
+            isConnected.set(false)
             scheduleReconnect()
+        }
+    }
+    
+    private fun flushPendingMessages() {
+        while (pendingMessages.isNotEmpty() && isConnected.get()) {
+            val (toId, content) = pendingMessages.poll() ?: break
+            doSendMessage(toId, content)
         }
     }
 
     private fun startHeartbeat() {
         heartbeatExecutor.scheduleAtFixedRate({
-            if (webSocket != null) {
-                // Send heartbeat "empty" message as requested
-                val heartbeatJson = """{"type":"HEARTBEAT"}"""
-                webSocket?.sendText(heartbeatJson, true)
+            try {
+                val currentTime = System.currentTimeMillis()
+                val timeSinceLastPong = currentTime - lastPongTime.get()
+                
+                // 检查心跳超时
+                if (isConnected.get() && timeSinceLastPong > heartbeatTimeoutMs) {
+                    logger.warn("Heartbeat timeout detected, reconnecting...")
+                    closeConnection()
+                    connect()
+                    return@scheduleAtFixedRate
+                }
+                
+                // 发送心跳
+                if (isConnected.get() && webSocket != null) {
+                    val heartbeatJson = """{"type":"HEARTBEAT"}"""
+                    webSocket?.sendText(heartbeatJson, true)
+                    logger.debug("Heartbeat sent")
+                } else if (!isConnected.get() && !isConnecting.get()) {
+                    // 连接断开且没有正在重连，尝试重连
+                    logger.info("Connection lost, attempting to reconnect...")
+                    connect()
+                }
+            } catch (e: Exception) {
+                logger.warn("Heartbeat error: ${e.message}")
             }
-        }, 30, 30, TimeUnit.SECONDS)
+        }, heartbeatIntervalSeconds, heartbeatIntervalSeconds, TimeUnit.SECONDS)
     }
 
     private fun scheduleReconnect() {
@@ -76,7 +145,9 @@ class WebSocketService {
              app.executeOnPooledThread {
                  try {
                      Thread.sleep(reconnectDelayMs)
-                     connect()
+                     if (!isConnected.get() && !isConnecting.get()) {
+                         connect()
+                     }
                  } catch (e: InterruptedException) {
                      Thread.currentThread().interrupt()
                  }
@@ -94,11 +165,21 @@ class WebSocketService {
         override fun onText(webSocket: WebSocket, data: CharSequence, last: Boolean): CompletionStage<*>? {
             val message = data.toString()
             logger.info("Received message: $message")
+            
+            // 更新最后收到消息的时间（作为心跳响应）
+            lastPongTime.set(System.currentTimeMillis())
 
             // Parse JSON manually to avoid dependencies
             val type = extractJsonField(message, "type")
             val content = extractJsonField(message, "content")
             val fromId = extractJsonField(message, "fromId")
+            
+            // 过滤心跳响应消息，不显示弹窗
+            if (type == "HEARTBEAT" || type == "PONG" || type == "heartbeat" || type == "pong") {
+                logger.debug("Heartbeat response received")
+                webSocket.request(1)
+                return super.onText(webSocket, data, last)
+            }
 
             if (type == "ERROR" && content != null) {
                 // Handle error message (e.g. User offline)
@@ -107,8 +188,9 @@ class WebSocketService {
                 
                 ApplicationManager.getApplication().service<ChatHistoryService>().addSystemMessage(targetId, content)
                 ApplicationManager.getApplication().messageBus.syncPublisher(ChatListener.TOPIC).onMessageReceived(targetId)
-            } else if (content != null && content.isNotEmpty()) {
-                val sender = fromId ?: "Unknown"
+            } else if (content != null && content.isNotEmpty() && fromId != null && fromId.isNotEmpty()) {
+                // 只有当 content 和 fromId 都存在且非空时才处理为聊天消息
+                val sender = fromId
                 
                 // Store message
                 ApplicationManager.getApplication().service<ChatHistoryService>().addMessage(sender, content, false)
@@ -128,8 +210,10 @@ class WebSocketService {
 
         override fun onClose(webSocket: WebSocket, statusCode: Int, reason: String): CompletionStage<*>? {
             logger.info("WebSocket closed: $statusCode $reason")
-            // Only reconnect if not intentionally closed for reconfiguration
-            // But here we can just schedule reconnect, if it was intentional connect() will be called immediately after
+            isConnected.set(false)
+            this@WebSocketService.webSocket = null
+            
+            // 总是尝试重连，除非是正常关闭
             if (statusCode != WebSocket.NORMAL_CLOSURE) {
                  scheduleReconnect()
             }
@@ -138,23 +222,34 @@ class WebSocketService {
 
         override fun onError(webSocket: WebSocket, error: Throwable) {
             logger.error("WebSocket error", error)
+            isConnected.set(false)
+            this@WebSocketService.webSocket = null
             scheduleReconnect()
             super.onError(webSocket, error)
         }
     }
 
     fun sendMessage(toId: String, content: String) {
-        if (webSocket == null) {
-            // NotificationDialog needs senderId and content, here we just show error
-            // Using a simple message dialog would be better but reusing NotificationDialog for consistency if needed
-            // Or just logging/ignoring for now as this is edge case
-            return
-        }
-        
-        // Store sent message
+        // 先存储消息到本地历史
         ApplicationManager.getApplication().service<ChatHistoryService>().addMessage(toId, content, true)
         ApplicationManager.getApplication().messageBus.syncPublisher(ChatListener.TOPIC).onMessageReceived(toId)
         
+        if (!isConnected.get() || webSocket == null) {
+            // 连接断开时，将消息加入队列，重连后发送
+            logger.info("Connection not available, queueing message for later delivery")
+            pendingMessages.offer(Pair(toId, content))
+            
+            // 触发重连
+            if (!isConnecting.get()) {
+                connect()
+            }
+            return
+        }
+        
+        doSendMessage(toId, content)
+    }
+    
+    private fun doSendMessage(toId: String, content: String) {
         // Construct JSON manually
         val json = """
             {
@@ -164,7 +259,14 @@ class WebSocketService {
             }
         """.trimIndent()
         
-        webSocket?.sendText(json, true)
+        try {
+            webSocket?.sendText(json, true)
+            logger.info("Message sent to $toId")
+        } catch (e: Exception) {
+            logger.error("Failed to send message: ${e.message}")
+            // 发送失败时加入队列
+            pendingMessages.offer(Pair(toId, content))
+        }
     }
 
     private fun extractJsonField(json: String, fieldName: String): String? {

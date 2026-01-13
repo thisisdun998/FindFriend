@@ -3,7 +3,7 @@
     <id>com.github.thisisdun998.findfriend</id>
     <name>FindFriend</name>
     <vendor>thisisdun998</vendor>
-
+    
     <depends>com.intellij.modules.platform</depends>
 
     <resource-bundle>messages.MyBundle</resource-bundle>
